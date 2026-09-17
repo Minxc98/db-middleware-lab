@@ -1,0 +1,12 @@
+# Normalise to LF in the repository. Without this, Windows checks files out as CRLF and the
+# shell scripts break the moment they run in WSL/Linux ($'\r': command not found).
+* text=auto eol=lf
+
+# Windows-only scripts genuinely want CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never touch binaries.
+*.jar binary
+*.png binary
+*.jpg binary

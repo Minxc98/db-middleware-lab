@@ -1,0 +1,10 @@
+lab:
+  es:
+    index-name: lab-product-it
+    bulk-size: 200
+
+logging:
+  level:
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN
+    org.springframework.data.elasticsearch.client.WIRE: INFO

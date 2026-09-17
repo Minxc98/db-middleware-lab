@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: middleware-lab-elasticsearch
+  elasticsearch:
+    # Overridden by Testcontainers in the integration suite.
+    uris: ${ES_URIS:http://localhost:9200}
+    username: ${ES_USERNAME:}
+    password: ${ES_PASSWORD:}
+    connection-timeout: 3s
+    socket-timeout: 30s
+
+lab:
+  es:
+    index-name: lab-product
+    bulk-size: 500
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    # Flip to TRACE to see the raw HTTP exchanged with Elasticsearch - the single most
+    # useful switch when a query does not behave as expected.
+    org.springframework.data.elasticsearch.client.WIRE: INFO

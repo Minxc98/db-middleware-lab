@@ -1,0 +1,10 @@
+# Stays at the repository root on purpose: it applies to the BUILD CONTEXT, and every
+# module's Dockerfile uses the repo root as context (multi-module Maven build).
+# The Dockerfiles themselves live with their module.
+**/target/
+.git/
+.idea/
+*.iml
+*.log
+**/DOCKER.md
+README.md

@@ -1,0 +1,107 @@
+# Self-contained environment for this module. Other middleware modules bring their own
+# compose file with their own project name, so several labs can run side by side.
+name: lab-elasticsearch
+
+services:
+  # A named volume is created owned by root, but Elasticsearch runs as uid 1000 and has to
+  # write into the snapshot repository. One-shot chown before the node starts.
+  backup-permissions:
+    image: alpine:3.20
+    container_name: lab-es-backup-perms
+    command: ["sh", "-c", "chown -R 1000:0 /backup && chmod -R 775 /backup"]
+    volumes:
+      - es-backup:/backup
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.6
+    container_name: lab-elasticsearch
+    environment:
+      - node.name=lab-es01
+      - cluster.name=db-middleware-lab
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - bootstrap.memory_lock=true
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      # Spelled out (these are the defaults) so the disk behaviour is visible and tweakable:
+      # below low -> normal; above high -> shards relocate; above flood_stage -> indices go read-only.
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=85%
+      - cluster.routing.allocation.disk.watermark.high=90%
+      - cluster.routing.allocation.disk.watermark.flood_stage=95%
+      # Local filesystem snapshot repository, so backup/restore behaviour is testable.
+      - path.repo=/usr/share/elasticsearch/backup
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+      nofile: { soft: 65536, hard: 65536 }
+    # Heap is 1g (ES_JAVA_OPTS); the rest is off-heap + page cache for the Lucene
+    # files. Sized at 3g so `docker stats` shows headroom instead of a constant ~97%.
+    mem_limit: 3g
+    volumes:
+      # Named volume, not a bind mount: Elasticsearch runs as uid 1000 and does not
+      # tolerate the permissions/locking of a Windows-hosted directory.
+      # Browse the files with the `toolbox` service below.
+      - es-data:/usr/share/elasticsearch/data
+      - es-backup:/usr/share/elasticsearch/backup
+    ports:
+      - "9200:9200"
+    depends_on:
+      backup-permissions:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  lab-app:
+    build:
+      # Repository root: multi-module Maven build needs the parent pom and the common module.
+      context: ..
+      dockerfile: middleware-lab-elasticsearch/Dockerfile
+    image: lab/middleware-lab-elasticsearch:dev
+    container_name: lab-app
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ES_URIS=http://elasticsearch:9200
+      - JAVA_OPTS=-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError
+    mem_limit: 1g
+    ports:
+      - "8080:8080"
+
+  # --- optional, opt in with: docker compose --profile ui up -d ---
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.18.6
+    container_name: lab-kibana
+    profiles: ["ui"]
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    mem_limit: 1g
+    ports:
+      - "5601:5601"
+
+  # --- optional shell with the ES data directory mounted read-only ---
+  # docker compose --profile tools run --rm toolbox
+  # Works even while Elasticsearch is stopped.
+  toolbox:
+    image: alpine:3.20
+    container_name: lab-toolbox
+    profiles: ["tools"]
+    volumes:
+      - es-data:/es-data:ro
+    working_dir: /es-data
+    # ncdu gives an interactive disk-usage browser over the index files.
+    entrypoint: ["sh", "-c", "apk add --no-cache tree ncdu >/dev/null && exec sh"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  es-data:
+    name: lab-elasticsearch-data
+  es-backup:
+    name: lab-elasticsearch-backup
