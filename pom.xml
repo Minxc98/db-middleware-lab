@@ -16,11 +16,12 @@
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>db-middleware-lab</name>
-    <description>Playground for exercising database / storage middleware (Elasticsearch first).</description>
+    <description>Playground for exercising database / storage middleware (Elasticsearch, MySQL).</description>
 
     <modules>
         <module>middleware-lab-common</module>
         <module>middleware-lab-elasticsearch</module>
+        <module>middleware-lab-mysql</module>
         <!-- Add one module per middleware under test, e.g.:
              <module>middleware-lab-shardingsphere</module>
              <module>middleware-lab-redis</module>
@@ -33,6 +34,7 @@
 
         <!-- Container images under test. Bump per middleware version you want to verify. -->
         <elasticsearch.image>docker.elastic.co/elasticsearch/elasticsearch:8.18.6</elasticsearch.image>
+        <mysql.image>mysql:8.0.46</mysql.image>
     </properties>
 
     <dependencyManagement>

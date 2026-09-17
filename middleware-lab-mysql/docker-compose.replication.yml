@@ -1,0 +1,98 @@
+# Two-node replication topology, separate from docker-compose.yml so the single-node lab and
+# this one can run side by side (different project name, different ports, different volumes).
+#
+#   docker compose -f docker-compose.replication.yml up -d
+#   docker compose -f docker-compose.replication.yml down -v
+#
+#   source  -> localhost:3307
+#   replica -> localhost:3308
+#
+# The replication suite enables itself when it finds a healthy replica on 3308 and skips
+# cleanly when it does not.
+name: lab-mysql-repl
+
+x-mysql: &mysql
+  image: mysql:8.0.46
+  environment:
+    - MYSQL_ROOT_PASSWORD=labroot
+    - MYSQL_ROOT_HOST=%
+    - TZ=UTC
+  # No MYSQL_DATABASE here on purpose. If both servers created the schema for themselves they
+  # would each do it under their own GTID, and the source's CREATE DATABASE would then fail to
+  # apply on the replica. setup-replication.sh creates it on the source once replication is
+  # running, and it arrives on the replica the way everything else does.
+  mem_limit: 1g
+  healthcheck:
+    test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent || exit 1"]
+    interval: 5s
+    timeout: 5s
+    retries: 30
+    start_period: 30s
+
+services:
+  source:
+    <<: *mysql
+    container_name: lab-mysql-source
+    command:
+      - --server-id=1
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-replica-updates=ON
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=ON
+      # The semi-sync settings are NOT here: rpl_semi_sync_source_timeout belongs to the plugin,
+      # and mysqld refuses to start on an unknown variable if the plugin is not loaded yet.
+      # setup-replication.sh installs the plugin and sets it.
+    volumes:
+      - source-data:/var/lib/mysql
+    ports:
+      - "3307:3306"
+
+  replica:
+    <<: *mysql
+    container_name: lab-mysql-replica
+    command:
+      - --server-id=2
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      # Without this the replica does not write its own binlog, and it could never be promoted
+      # to source (or feed a second-level replica) without a restart.
+      - --log-replica-updates=ON
+      - --innodb-buffer-pool-size=128M
+      - --performance-schema=ON
+      # read_only / super_read_only are set by setup-replication.sh rather than here: with
+      # super_read_only on from the first second, the entrypoint cannot finish initialising the
+      # server it is starting. (Neither one affects the replication applier - the SQL thread
+      # writes regardless, which is the whole point.)
+      # Multi-threaded apply, the first answer to replication lag (notes 07 §4).
+      - --replica-parallel-workers=4
+      - --replica-parallel-type=LOGICAL_CLOCK
+    volumes:
+      - replica-data:/var/lib/mysql
+    ports:
+      - "3308:3306"
+
+  # One-shot: wires the replica to the source and turns on semi-sync on both sides.
+  # Runs to completion and exits; `docker compose ps -a` shows it as exited 0 when it worked.
+  setup:
+    image: mysql:8.0.46
+    container_name: lab-mysql-repl-setup
+    depends_on:
+      source:
+        condition: service_healthy
+      replica:
+        condition: service_healthy
+    volumes:
+      - ./docker/replication:/scripts:ro
+    entrypoint: ["bash", "/scripts/setup-replication.sh"]
+    restart: "no"
+
+volumes:
+  source-data:
+    name: lab-mysql-source-data
+  replica-data:
+    name: lab-mysql-replica-data

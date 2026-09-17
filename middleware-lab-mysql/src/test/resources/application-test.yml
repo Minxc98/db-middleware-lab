@@ -1,0 +1,18 @@
+lab:
+  mysql:
+    # The suite never touches lab_order: pointing the tests at a long-lived node must not
+    # destroy whatever the app left there.
+    table: lab_order_it
+    batch-size: 200
+    seed-size: 20000
+
+spring:
+  datasource:
+    hikari:
+      # Lock and MVCC tests park several connections in open transactions at the same time.
+      maximum-pool-size: 16
+
+logging:
+  level:
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN

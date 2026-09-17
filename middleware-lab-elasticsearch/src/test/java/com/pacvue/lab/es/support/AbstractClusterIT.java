@@ -1,7 +1,6 @@
 package com.pacvue.lab.es.support;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
@@ -24,7 +23,7 @@ import org.springframework.test.context.DynamicPropertySource;
  */
 @SpringBootTest
 @ActiveProfiles("test")
-@EnabledIf("com.pacvue.lab.es.support.ClusterAvailability#isThreeNodeClusterUp")
+@RequiresThreeNodeCluster
 public abstract class AbstractClusterIT {
 
     @Autowired

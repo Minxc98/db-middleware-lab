@@ -1,0 +1,135 @@
+# Self-contained environment for this module. Other middleware modules bring their own
+# compose file with their own project name, so several labs can run side by side.
+name: lab-mysql
+
+services:
+  mysql:
+    image: mysql:8.0.46
+    container_name: lab-mysql
+    # Passed as flags rather than a mounted my.cnf on purpose: a file bind-mounted from a
+    # Windows-hosted checkout arrives world-writable (/mnt/c is 0777 under WSL2) and MySQL
+    # *silently ignores* world-writable config files - you end up on stock defaults with one
+    # warning in the log. Flags cannot be ignored. MysqlContainerFactory passes the same set.
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+
+      # --- identity + binary log (notes 06/07) ---
+      # A single node still writes a binlog: it is what the binlog tests read, and it makes
+      # this node usable as a replication source without a restart.
+      - --server-id=1
+      - --log-bin=binlog
+      - --binlog-format=ROW              # the 8.0 default; STATEMENT is unsafe for
+                                         # non-deterministic statements (see BinlogFormatIT)
+      - --binlog-expire-logs-seconds=604800
+      - --log-replica-updates=ON
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+
+      # --- durability (notes 06) ---
+      - --innodb-flush-log-at-trx-commit=1   # fsync redo on every commit: nothing committed is lost
+      - --sync-binlog=1                      # fsync binlog on every commit
+                                             # "double 1" is the safe setting; group commit is
+                                             # what keeps it affordable
+
+      # --- InnoDB (notes 02) ---
+      - --innodb-buffer-pool-size=256M   # small on purpose: eviction is easy to provoke
+      - --innodb-file-per-table=ON       # one .ibd per table, so file size is per-table
+      - --innodb-print-all-deadlocks=ON  # every deadlock reaches the error log, not just the
+                                         # most recent one in SHOW ENGINE INNODB STATUS
+
+      # --- transactions + locks (notes 04/05) ---
+      - --transaction-isolation=REPEATABLE-READ   # the default; stated because the whole
+                                                  # MVCC/gap-lock story hangs off it
+      - --innodb-lock-wait-timeout=10    # DEVIATION: default is 50s. A lock test that is meant
+                                         # to block would otherwise stall the suite for a minute.
+                                         # Tests that assert on blocking set it per session anyway.
+
+      # --- observability ---
+      - --performance-schema=ON          # data_locks / data_lock_waits live here; without it the
+                                         # lock-shape tests have nothing to read
+      # Metadata locks are NOT instrumented by default, so performance_schema.metadata_locks
+      # comes back empty and the classic "a long transaction blocks ALTER TABLE, which then
+      # blocks every later query" is invisible. Turning it on is what makes it diagnosable.
+      - --performance-schema-instrument=wait/lock/metadata/sql/mdl=ON
+      - --slow-query-log=ON
+      - --slow-query-log-file=/var/lib/mysql/slow.log
+      - --long-query-time=1
+
+      # MyISAM is compared against InnoDB in the architecture suite; give it a key cache.
+      - --key-buffer-size=16M
+    environment:
+      - MYSQL_ROOT_PASSWORD=labroot
+      - MYSQL_ROOT_HOST=%
+      - TZ=UTC
+    volumes:
+      # Named volume, not a bind mount: MySQL runs as uid 999 and a Windows-hosted
+      # directory breaks both permissions and the file locking InnoDB relies on.
+      # Browse the files with the `toolbox` service below.
+      - mysql-data:/var/lib/mysql
+      - ./docker/init:/docker-entrypoint-initdb.d:ro
+    # 256M buffer pool + ~400M of everything else. Sized so `docker stats` shows headroom.
+    mem_limit: 1g
+    ports:
+      - "3306:3306"
+    healthcheck:
+      # $$ survives compose's own interpolation and reaches the shell as a single $.
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  lab-app:
+    build:
+      # Repository root: multi-module Maven build needs the parent pom and the common module.
+      context: ..
+      dockerfile: middleware-lab-mysql/Dockerfile
+    image: lab/middleware-lab-mysql:dev
+    container_name: lab-mysql-app
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - MYSQL_URL=jdbc:mysql://mysql:3306/lab_mysql?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      - MYSQL_USERNAME=lab
+      - MYSQL_PASSWORD=lab
+      - JAVA_OPTS=-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError
+    mem_limit: 1g
+    ports:
+      - "8081:8080"
+
+  # --- optional, opt in with: docker compose --profile ui up -d ---
+  # A one-binary SQL client at http://localhost:8082
+  # Server: mysql   User: root   Password: labroot
+  adminer:
+    image: adminer:4
+    container_name: lab-mysql-adminer
+    profiles: ["ui"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      - ADMINER_DEFAULT_SERVER=mysql
+    mem_limit: 256m
+    ports:
+      - "8082:8080"
+
+  # --- optional shell with the MySQL data directory mounted read-only ---
+  # docker compose --profile tools run --rm toolbox
+  # Works even while MySQL is stopped - which is the only way to look at ibdata1,
+  # ib_logfile* and the .ibd files without the server changing them underneath you.
+  toolbox:
+    image: alpine:3.20
+    container_name: lab-mysql-toolbox
+    profiles: ["tools"]
+    volumes:
+      - mysql-data:/mysql-data:ro
+    working_dir: /mysql-data
+    entrypoint: ["sh", "-c", "apk add --no-cache tree ncdu >/dev/null && exec sh"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  mysql-data:
+    name: lab-mysql-data

@@ -1,0 +1,37 @@
+spring:
+  application:
+    name: middleware-lab-mysql
+  datasource:
+    # Overridden by the integration suite (Testcontainers or a node you already have up).
+    # allowPublicKeyRetrieval is needed because 8.0 defaults to caching_sha2_password and this
+    # connection is not TLS - fine for a local lab, never do it against a real server.
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/lab_mysql?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:labroot}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # Several behaviour tests hold two or three connections open at once, each parked in an
+      # uncommitted transaction. A pool that is too small deadlocks the test, not the server.
+      maximum-pool-size: 16
+      connection-timeout: 5000
+
+lab:
+  mysql:
+    table: lab_order
+    batch-size: 500
+    seed-size: 100000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    # Flip to DEBUG to see every statement Spring issues - the quickest way to find out that
+    # the SQL reaching the server is not the SQL you thought you wrote.
+    org.springframework.jdbc.core.JdbcTemplate: INFO
